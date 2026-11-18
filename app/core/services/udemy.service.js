@@ -39,22 +39,17 @@ class UdemyService {
 		return error;
 	}
 
-	async _prepareStreamSource(courseId, el) {
+	async _prepareStreamSource(courseId, el, includeHlsQualities) {
 		try {
 			if (el._class === "lecture") {
-				const assetType = el.asset?.asset_type.toLowerCase();
+				const assetType = el.asset?.asset_type?.toLowerCase();
 				if (assetType === "video" || assetType === "videomashup") {
 					const asset = el.asset;
-					const stream_urls = asset.stream_urls?.Video || asset.media_sources;
-					const isEncrypted = Boolean(asset.media_license_token);
-					if (stream_urls) {
-						// console.log(`Preparing streams for asset id: ${asset.id}`);
-						const streams = await this._convertToStreams(stream_urls, isEncrypted, asset.title);
-
-						delete el.asset.stream_urls;
-						delete el.asset.media_sources;
-						el.asset.streams = streams;
-					}
+					const videoUrls = asset.stream_urls?.Video;
+					const streamUrls = videoUrls?.length ? videoUrls : asset.media_sources;
+					asset.streams = await this._convertToStreams(streamUrls, Boolean(asset.media_license_token), includeHlsQualities);
+					delete asset.stream_urls;
+					delete asset.media_sources;
 				} else if (assetType === "presentation") {
 					const lecture = await this.fetchLecture(courseId, el.id, true, true);
 					el.asset = lecture.asset;
@@ -66,10 +61,10 @@ class UdemyService {
 		}
 	}
 
-	async _prepareStreamsSource(courseId, items) {
+	async _prepareStreamsSource(courseId, items, includeHlsQualities) {
 		// console.log("Preparing stream urls...", items);
 		try {
-			const promises = items.map((el) => this._prepareStreamSource(courseId, el));
+			const promises = items.map((el) => this._prepareStreamSource(courseId, el, includeHlsQualities));
 			await Promise.all(promises);
 			// console.log("All streams prepared");
 		} catch (error) {
@@ -77,103 +72,61 @@ class UdemyService {
 		}
 	}
 
-	/**
-	 * Transforms media sources into a standardized format.
-	 *
-	 * @param {Array<Object>} streamUrls - The array of stream URLs.
-	 * @param {boolean} isEncrypted - Indicates if the media is encrypted.
-	 * @returns {Promise<{
-	 *  minQuality: string|null,
-	 *  maxQuality: string|null,
-	 *  isEncrypted: boolean
-	 *  sources: { [key: string]: { type: string, url: string } }
-	 * }>} - The transformed media sources.
-	 */
-	async _convertToStreams(streamUrls, isEncrypted, title = "") {
-		try {
-			if (!streamUrls) {
-				throw this._error("ENO_STREAMS", "No streams found to convert");
-			}
-			const sources = {};
-			let minQuality = Number.MAX_SAFE_INTEGER;
-			let maxQuality = Number.MIN_SAFE_INTEGER;
-
-			let streams = !isEncrypted ? streamUrls : streamUrls.filter((v) => !(v.file || v.src).includes("/encrypted-files"));
-			isEncrypted = isEncrypted ? streams.length === 0 : isEncrypted;
-
-			streams = streams.length > 0 ? streams : streamUrls;
-
-			const promises = streams.map(async (video) => {
-				const type = video.type;
-				if (type !== "application/dash+xml") {
-					const quality = video.label.toLowerCase();
-					const url = video.file || video.src;
-
-					sources[quality] = { type, url };
-
-					if (quality !== "auto") {
-						const numericQuality = parseInt(quality, 10);
-						if (!isNaN(numericQuality)) {
-							if (numericQuality < minQuality) {
-								minQuality = numericQuality;
-							}
-							if (numericQuality > maxQuality) {
-								maxQuality = numericQuality;
-							}
-						}
-					} else {
-						// auto
-						if (!isEncrypted) {
-							const m3u8 = new M3U8Service(url);
-							// console.log('Before loading playlist');
-							const playlist = await m3u8.loadPlaylist();
-							// console.log('After loading playlist', playlist);
-
-							for (const item of playlist) {
-								// console.log(`for of playlist ${title}`, item);
-								const numericQuality = item.quality;
-
-								if (numericQuality < minQuality) {
-									minQuality = numericQuality;
-								}
-								if (numericQuality > maxQuality) {
-									maxQuality = numericQuality;
-								}
-								if (!sources[numericQuality.toString()]) {
-									sources[numericQuality.toString()] = { type, url: item.url };
-								}
-							}
-
-							// playlist.forEach(item => {
-							// const numericQuality = item.quality;
-
-							// if (numericQuality < minQuality) {
-							//     minQuality = numericQuality;
-							// }
-							// if (numericQuality > maxQuality) {
-							//     maxQuality = numericQuality;
-							// }
-							// if (!sources[numericQuality.toString()]) {
-							//     sources[numericQuality.toString()] = { type, url: item.url }
-							// }
-							// });
-						}
-					}
-				}
-			});
-
-			await Promise.all(promises);
-			// console.log(`All stream urls converted for assetName: ${title}`);
-
-			return {
-				minQuality: minQuality === Number.MAX_SAFE_INTEGER ? (sources["auto"] ? "auto" : null) : minQuality.toString(),
-				maxQuality: maxQuality === Number.MIN_SAFE_INTEGER ? (sources["auto"] ? "auto" : null) : maxQuality.toString(),
-				isEncrypted,
-				sources,
-			};
-		} catch (error) {
-			throw this._error("ECONVERT_TO_STREAMS", error.message);
+	async _convertToStreams(streamUrls, hasLicense, includeHlsQualities = true) {
+		const sources = {};
+		const entries = [];
+		for (const entry of Array.isArray(streamUrls) ? streamUrls : []) {
+			const src = entry?.file || entry?.src;
+			if (typeof src !== "string" || !src.trim()) continue;
+			const url = src.startsWith("//") ? "https:" + src : src;
+			entries.push({ url, type: entry.type, label: entry.label });
 		}
+		const clearEntries = entries.filter((entry) => !M3U8Service.isProtectedUrl(entry.url));
+		const compareQualities = includeHlsQualities || clearEntries.some((entry) => /^\d+p?$/i.test(entry.label));
+		// A license token marks the asset as potentially protected. Udemy may still
+		// expose a clear fallback stream, so only classify the asset as encrypted
+		// when every available media source is protected.
+		let isEncrypted = entries.length > 0 && clearEntries.length === 0;
+		let protectedPlaylist = false;
+
+		if (!isEncrypted) {
+			for (const entry of clearEntries) {
+				const url = entry.url;
+				if (entry.type === "application/dash+xml") continue;
+
+				const type = M3U8Service.isHls(entry.type, url) ? "application/x-mpegurl" : (entry.type || "");
+				const quality = String(entry.label || "auto").toLowerCase().replace(/^(\d+)p$/, "$1");
+				if (quality !== "auto" && !/^\d+$/.test(quality)) continue;
+				const source = { type, url };
+				sources[quality] = source;
+
+				if (quality !== "auto" || type !== "application/x-mpegurl" || !compareQualities) continue;
+				try {
+					const variants = await new M3U8Service(url).loadPlaylist();
+					for (const variant of variants) {
+						if (!variant.quality) continue;
+						sources[variant.quality] ??= { type, url: variant.url, externalAudio: variant.externalAudio, mediaPlaylist: true };
+					}
+				} catch (error) {
+					if (error.code === "HLS_PROTECTED") {
+						protectedPlaylist = true;
+						delete sources[quality];
+					}
+					// Playlist probing only improves quality discovery. Leave the
+					// master URL in the source list so the download stage can retry it.
+				}
+			}
+			isEncrypted = protectedPlaylist && !Object.keys(sources).length;
+		}
+
+		const qualities = Object.keys(sources).filter((key) => key !== "auto").sort((a, b) => Number(a) - Number(b));
+		const fallback = sources.auto ? "auto" : null;
+		return {
+			minQuality: qualities[0] ?? fallback,
+			maxQuality: qualities[qualities.length - 1] ?? fallback,
+			isEncrypted,
+			sources,
+		};
 	}
 
 	async #fetchUrl(url, method = "GET", httpTimeout = this.#timeout) {
@@ -335,7 +288,7 @@ class UdemyService {
 	 * @param {'less' | 'all' | 'lectures' | 'attachments'} [contentType='all'] - The type of content to fetch.
 	 * @return {Promise<any>} - The course content data.
 	 */
-	async fetchCourseContent(courseId, contentType, httpTimeout = this.#timeout) {
+	async fetchCourseContent(courseId, contentType, httpTimeout = this.#timeout, includeHlsQualities = true) {
 		let url = `${this.#urlBase}/api-2.0/courses/${courseId}/cached-subscriber-curriculum-items?page_size=200`;
 
 		contentType = (contentType || "less").toLowerCase();
@@ -403,7 +356,7 @@ class UdemyService {
 
 		contentData.count = contentData.results.length;
 
-		await this._prepareStreamsSource(courseId, contentData.results);
+		if (contentType !== "attachments") await this._prepareStreamsSource(courseId, contentData.results, includeHlsQualities);
 		// console.log("fetchCourseContent", contentData);
 		return contentData;
 	}
