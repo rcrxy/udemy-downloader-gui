@@ -105,7 +105,15 @@ class UdemyService {
 					const variants = await new M3U8Service(url).loadPlaylist();
 					for (const variant of variants) {
 						if (!variant.quality) continue;
-						sources[variant.quality] ??= { type, url: variant.url, externalAudio: variant.externalAudio, mediaPlaylist: true };
+						sources[variant.quality] ??= {
+							type,
+							url: variant.url,
+							externalAudio: variant.externalAudio,
+							audioPlaylist: variant.audioPlaylist,
+							audioName: variant.audioName,
+							audioLanguage: variant.audioLanguage,
+							mediaPlaylist: true,
+						};
 					}
 				} catch (error) {
 					if (error.code === "HLS_PROTECTED") {

@@ -1406,6 +1406,7 @@ function startDownload($course, courseData, subTitle = "", downloadSettings = Se
 							await new M3U8Service(lectureData.src).download(file, {
 								attempts: downloadSettings.autoRetry ? 3 : 1,
 								externalAudio: lectureData.externalAudio,
+								audioPlaylist: lectureData.audioPlaylist,
 								mediaPlaylist: lectureData.mediaPlaylist,
 								onQuality: setLabelQuality,
 								onProgress(index, total, bytes, milliseconds) {

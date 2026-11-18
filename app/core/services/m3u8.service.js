@@ -1,9 +1,11 @@
 "use strict";
 
 const fs = require("fs");
+const { execFile } = require("child_process");
 
 const HLS_TYPES = new Set(["application/x-mpegurl", "application/vnd.apple.mpegurl", "audio/mpegurl", "audio/x-mpegurl"]);
 const activeOutputs = new Set();
+const FFMPEG_TIMEOUT = 5 * 60 * 1000;
 
 function hlsError(code, message, status) {
 	return Object.assign(new Error(message), { code, status });
@@ -45,6 +47,11 @@ class M3U8Service {
 			throw hlsError("HLS_URL", "HLS requires an HTTP(S) URL");
 		}
 		return url.href;
+	}
+
+	static selectAudioTrack(tracks, groupId) {
+		const matching = tracks.filter((track) => track.groupId === groupId);
+		return matching.find((track) => track.default) ?? matching.find((track) => track.autoselect) ?? matching[0];
 	}
 
 	static async request(url, stage, { binary = false, range, attempts = 3 } = {}) {
@@ -104,7 +111,7 @@ class M3U8Service {
 
 		const variants = [];
 		const segments = [];
-		const externalAudioGroups = new Set();
+		const audioTracks = [];
 		const embeddedAudioGroups = new Set();
 		let stream;
 		let segmentPending = false;
@@ -131,7 +138,20 @@ class M3U8Service {
 				stream = playlistAttributes(line);
 			} else if (line.startsWith("#EXT-X-MEDIA:")) {
 				const media = playlistAttributes(line);
-				if (media.TYPE === "AUDIO") (media.URI ? externalAudioGroups : embeddedAudioGroups).add(media["GROUP-ID"]);
+				if (media.TYPE === "AUDIO") {
+					if (media.URI) {
+						audioTracks.push({
+							groupId: media["GROUP-ID"],
+							url: M3U8Service.resolveUrl(media.URI, base),
+							name: media.NAME,
+							language: media.LANGUAGE,
+							default: media.DEFAULT === "YES",
+							autoselect: media.AUTOSELECT === "YES",
+						});
+					} else {
+						embeddedAudioGroups.add(media["GROUP-ID"]);
+					}
+				}
 			} else if (line.startsWith("#EXT-X-MAP:")) {
 				const map = playlistAttributes(line);
 				segment(map.URI, map.BYTERANGE, true);
@@ -162,10 +182,18 @@ class M3U8Service {
 			throw hlsError("HLS_PROTECTED", "HLS playlist refers to encrypted media");
 		}
 		return {
-			variants: clearVariants.map(({ audioGroup, ...variant }) => ({
-				...variant,
-				externalAudio: externalAudioGroups.has(audioGroup) && !embeddedAudioGroups.has(audioGroup),
-			})),
+			variants: clearVariants.map(({ audioGroup, ...variant }) => {
+				const audioTrack =
+					!embeddedAudioGroups.has(audioGroup) &&
+					M3U8Service.selectAudioTrack(audioTracks, audioGroup);
+				return {
+					...variant,
+					externalAudio: Boolean(audioTrack),
+					audioPlaylist: audioTrack?.url,
+					audioName: audioTrack?.name,
+					audioLanguage: audioTrack?.language,
+				};
+			}),
 			segments,
 		};
 	}
@@ -184,53 +212,158 @@ class M3U8Service {
 		return (await M3U8Service.load(this.url, "HLS master playlist", attempts)).variants;
 	}
 
-	async download(filePath, { attempts = 3, externalAudio = false, mediaPlaylist = false, onProgress = () => {}, onQuality = () => {} } = {}) {
+	static async resolveMediaPlaylist(url, attempts, onQuality) {
+		const visited = new Set();
+		let audioPlaylist;
+		let stage = "HLS playlist";
+		while (!visited.has(url) && visited.size < 5) {
+			visited.add(url);
+			const { variants, segments } = await M3U8Service.load(url, stage, attempts);
+			if (variants.length) {
+				const best = variants.sort((a, b) => b.quality - a.quality || b.bandwidth - a.bandwidth)[0];
+				if (best.quality) onQuality(best.quality);
+				url = best.url;
+				audioPlaylist ??= best.audioPlaylist;
+				stage = "HLS media playlist";
+				continue;
+			}
+			if (!segments.some(({ initialization }) => !initialization)) {
+				throw hlsError("HLS_PLAYLIST", "HLS media playlist contains no segments");
+			}
+			return { segments, audioPlaylist };
+		}
+		throw hlsError("HLS_PLAYLIST", "HLS playlist nesting limit reached");
+	}
+
+	static async saveSegments(segments, targetPath, label, attempts, progress) {
+		const file = await fs.promises.open(targetPath, "w");
+		try {
+			for (let index = 0; index < segments.length; index++) {
+				const { url, range, initialization } = segments[index];
+				const prefix = label === "media" ? "" : label + " ";
+				const stage = initialization
+					? "HLS " + prefix + "initialization segment"
+					: "HLS " + prefix + "segment " + (index + 1);
+				const started = Date.now();
+				const { data } = await M3U8Service.request(url, stage, { binary: true, range, attempts });
+				await file.writeFile(Buffer.from(data));
+				progress(index + 1, segments.length, data.byteLength, Math.max(Date.now() - started, 1));
+			}
+		} finally {
+			await file.close();
+		}
+	}
+
+	static muxTracks(videoPath, audioPath, outputPath, ffmpegPath = "ffmpeg") {
+		const args = [
+			"-hide_banner",
+			"-loglevel",
+			"error",
+			"-nostdin",
+			"-y",
+			"-i",
+			videoPath,
+			"-i",
+			audioPath,
+			"-map",
+			"0:v:0",
+			"-map",
+			"1:a:0",
+			"-c",
+			"copy",
+			"-movflags",
+			"+faststart",
+			"-f",
+			"mp4",
+			outputPath,
+		];
+		return new Promise((resolve, reject) => {
+			execFile(
+				ffmpegPath,
+				args,
+				{ timeout: FFMPEG_TIMEOUT, windowsHide: true, maxBuffer: 1024 * 1024 },
+				(error, _stdout, stderr) => {
+					if (!error) return resolve();
+					if (error.code === "ENOENT") {
+						return reject(hlsError("HLS_AUDIO_NO_FFMPEG", "Separate HLS audio requires ffmpeg on PATH or FFMPEG_PATH"));
+					}
+					const detail = String(stderr || error.message)
+						.trim()
+						.split(/\r?\n/)
+						.slice(-4)
+						.join("\n");
+					reject(hlsError("HLS_AUDIO_MUX", "Failed to merge HLS audio and video" + (detail ? "\n" + detail : "")));
+				}
+			);
+		});
+	}
+
+	async download(
+		filePath,
+		{
+			attempts = 3,
+			externalAudio = false,
+			audioPlaylist,
+			mediaPlaylist = false,
+			onProgress = () => {},
+			onQuality = () => {},
+			ffmpegPath = process.env.FFMPEG_PATH || "ffmpeg",
+		} = {}
+	) {
 		const tempPath = filePath + ".hls.part";
+		const videoPath = filePath + ".video.part";
+		const audioPath = filePath + ".audio.part";
+		const temporaryPaths = [tempPath, videoPath, audioPath];
 		if (activeOutputs.has(filePath)) throw hlsError("HLS_ACTIVE", "HLS output is already being downloaded");
 		activeOutputs.add(filePath);
-		let file;
 		try {
-			let url = this.url;
-			let stage = mediaPlaylist ? "HLS media playlist" : "HLS playlist";
-			const visited = new Set();
-			while (!visited.has(url) && visited.size < 5) {
-				if (externalAudio) {
-					throw hlsError("HLS_AUDIO", "HLS variant requires a separate audio track");
-				}
-				visited.add(url);
-				const { variants, segments } = await M3U8Service.load(url, stage, attempts);
-				if (variants.length) {
-					const best = variants.sort((a, b) => b.quality - a.quality || b.bandwidth - a.bandwidth)[0];
-					if (best.quality) onQuality(best.quality);
-					url = best.url;
-					externalAudio = best.externalAudio;
-					stage = "HLS media playlist";
-					continue;
-				}
-				if (!segments.some(({ initialization }) => !initialization)) {
-					throw hlsError("HLS_PLAYLIST", "HLS media playlist contains no segments");
-				}
-
-				file = await fs.promises.open(tempPath, "w");
-				for (let i = 0; i < segments.length; i++) {
-					const { url: segmentUrl, range, initialization } = segments[i];
-					const start = Date.now();
-					const { data } = await M3U8Service.request(segmentUrl, initialization ? "HLS initialization segment" : "HLS segment " + (i + 1), {
-						binary: true, range, attempts,
-					});
-					await file.writeFile(Buffer.from(data));
-					onProgress(i + 1, segments.length, data.byteLength, Math.max(Date.now() - start, 1));
-				}
-				await file.close();
-				file = undefined;
-				await fs.promises.rename(tempPath, filePath);
-				return;
+			const video = await M3U8Service.resolveMediaPlaylist(
+				this.url,
+				attempts,
+				mediaPlaylist ? () => {} : onQuality
+			);
+			const resolvedAudioPlaylist = video.audioPlaylist || audioPlaylist;
+			if (externalAudio && !resolvedAudioPlaylist) {
+				throw hlsError("HLS_AUDIO_PLAYLIST", "Separate HLS audio playlist URL is missing");
 			}
-			throw hlsError("HLS_PLAYLIST", "HLS playlist nesting limit reached");
+
+			const audio = resolvedAudioPlaylist
+				? await M3U8Service.resolveMediaPlaylist(resolvedAudioPlaylist, attempts, () => {})
+				: null;
+			const totalSegments = video.segments.length + (audio?.segments.length || 0);
+			let completedSegments = 0;
+			await M3U8Service.saveSegments(
+				video.segments,
+				audio ? videoPath : tempPath,
+				audio ? "video" : "media",
+				attempts,
+				(index, _total, bytes, milliseconds) => {
+					completedSegments++;
+					onProgress(completedSegments, totalSegments, bytes, milliseconds);
+				}
+			);
+			if (audio) {
+				await M3U8Service.saveSegments(
+					audio.segments,
+					audioPath,
+					"audio",
+					attempts,
+					(index, _total, bytes, milliseconds) => {
+						completedSegments++;
+						onProgress(completedSegments, totalSegments, bytes, milliseconds);
+					}
+				);
+				await M3U8Service.muxTracks(videoPath, audioPath, tempPath, ffmpegPath);
+				for (const temporaryPath of [videoPath, audioPath]) {
+					await fs.promises.unlink(temporaryPath).catch((cleanupError) => {
+						if (cleanupError.code !== "ENOENT") throw cleanupError;
+					});
+				}
+			}
+			await fs.promises.rename(tempPath, filePath);
 		} catch (error) {
-			if (file || fs.existsSync(tempPath)) {
-				if (file) await file.close();
-				await fs.promises.unlink(tempPath).catch((cleanupError) => {
+			for (const temporaryPath of temporaryPaths) {
+				await fs.promises.unlink(temporaryPath).catch((cleanupError) => {
 					if (cleanupError.code !== "ENOENT") throw cleanupError;
 				});
 			}

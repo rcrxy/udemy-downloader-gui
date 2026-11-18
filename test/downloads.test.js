@@ -191,15 +191,51 @@ test("a license token falls back to clear sources instead of blocking the whole 
 	assert.equal(protectedOnly.isEncrypted, true);
 });
 
-test("HLS does not produce a silent file for a separate-audio variant", async (t) => {
-	const f = await fixture(t, (_req, res) => res.end(
-		'#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Main",URI="audio.m3u8"\n' +
-		'#EXT-X-STREAM-INF:BANDWIDTH=2000,RESOLUTION=1280x720,AUDIO="a"\nvideo/media.m3u8'
-	));
+test("HLS downloads a separate audio track and muxes it with the video", async (t) => {
+	const f = await fixture(t, (req, res) => {
+		switch (req.url) {
+			case "/master.m3u8":
+				res.end(
+					'#EXTM3U\n' +
+					'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Alternate",URI="alternate.m3u8"\n' +
+					'#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Main",DEFAULT=YES,URI="audio.m3u8"\n' +
+					'#EXT-X-STREAM-INF:BANDWIDTH=2000,RESOLUTION=1280x720,AUDIO="a"\nvideo/media.m3u8'
+				);
+				break;
+			case "/video/media.m3u8":
+				res.end("#EXTM3U\n#EXTINF:1,\n/video.ts");
+				break;
+			case "/video.ts":
+				res.end("video-segment");
+				break;
+			case "/audio.m3u8":
+				res.end("#EXTM3U\n#EXTINF:1,\n/audio.aac");
+				break;
+			case "/audio.aac":
+				res.end("audio-segment");
+				break;
+			default:
+				res.writeHead(404).end();
+		}
+	});
+	const hls = new M3U8Service(f.url + "/master.m3u8");
+	const playlist = await hls.loadPlaylist();
+	assert.equal(playlist[0].externalAudio, true);
+	assert.equal(playlist[0].audioPlaylist, f.url + "/audio.m3u8");
+	assert.equal(playlist[0].audioName, "Main");
+	const originalMuxTracks = M3U8Service.muxTracks;
+	M3U8Service.muxTracks = async (videoPath, audioPath, outputPath) => {
+		const data = Buffer.concat([fs.readFileSync(videoPath), fs.readFileSync(audioPath)]);
+		fs.writeFileSync(outputPath, data);
+	};
+	t.after(() => {
+		M3U8Service.muxTracks = originalMuxTracks;
+	});
 	const output = path.join(f.dir, "video.mp4");
-	await assert.rejects(new M3U8Service(f.url + "/master.m3u8").download(output), { code: "HLS_AUDIO" });
-	assert.deepEqual(f.requests.map((req) => req.url), ["/master.m3u8"]);
-	assert.deepEqual(fs.readdirSync(f.dir), []);
+	await hls.download(output);
+	assert.equal(fs.readFileSync(output, "utf8"), "video-segmentaudio-segment");
+	assert.deepEqual(fs.readdirSync(f.dir), ["video.mp4"]);
+	assert.ok(f.requests.every((req) => req.url !== "/alternate.m3u8"));
 });
 
 test("MP4 and non-range attachments are written with exactly the advertised bytes", async (t) => {
