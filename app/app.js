@@ -28,6 +28,7 @@ let repoAccount = "heliomarpm";
 let udemyService;
 let selectedRecordingSource = null;
 let recordingClock = null;
+let openingPlayer = false;
 const windowRecorder = new WindowRecorder({
 	listSources: () => ipcRenderer.invoke("recording:list-sources"),
 	getOutputDirectory: () => Settings.downloadDirectory("Recordings"),
@@ -147,7 +148,14 @@ $(".ui.dashboard .content").on("click", "#save_logger", saveLogFile);
 
 $(".ui.dashboard .content").on("click", ".refresh-recording-sources", loadRecordingSources);
 
-$(".ui.dashboard .content").on("click", ".open-udemy-player", openCompatibleUdemyPlayer);
+$(".ui.dashboard .content").on("click", ".open-udemy-player", () => openUdemyPlayer(false));
+$(".ui.dashboard .content").on("click", ".open-compatible-udemy-player", () => openUdemyPlayer(true));
+ipcRenderer.on("udemy-player:closed", (_event, id) => {
+	if (selectedRecordingSource?.id !== id) return;
+	selectedRecordingSource = null;
+	$(".embedded-player-status").hide();
+	$(".start-recording").prop("disabled", true);
+});
 
 $(".ui.dashboard .content").on("click", ".start-recording", async () => {
 	if (!selectedRecordingSource) {
@@ -383,7 +391,7 @@ async function loadRecordingSources() {
 	$button.addClass("loading disabled");
 	try {
 		const sources = await windowRecorder.listSources();
-		if (selectedRecordingSource && !sources.some((source) => source.id === selectedRecordingSource.id)) {
+		if (selectedRecordingSource && !selectedRecordingSource.embedded && !sources.some((source) => source.id === selectedRecordingSource.id)) {
 			selectedRecordingSource = null;
 			$(".start-recording").prop("disabled", true);
 		}
@@ -422,29 +430,47 @@ async function waitForNewPlayerSource(previousSourceIds) {
 	throw new Error(translate("Unable to access the compatible Udemy Player"));
 }
 
-async function openCompatibleUdemyPlayer() {
-	if (["starting", "recording", "paused", "finalizing"].includes(windowRecorder.state)) return;
-	const $button = $(".open-udemy-player").addClass("loading disabled");
+async function openCompatibleUdemyPlayer(subdomain) {
+	const executable = compatiblePlayerExecutable();
+	if (!executable) throw new Error(translate("Microsoft Edge or Google Chrome was not found."));
+	const previousSourceIds = new Set((await windowRecorder.listSources()).map((source) => source.id));
+	const player = spawn(executable, [`--app=https://${subdomain}.udemy.com/`, "--start-maximized"], {
+		detached: true,
+		stdio: "ignore",
+	});
+	await new Promise((resolve, reject) => {
+		player.once("spawn", resolve);
+		player.once("error", reject);
+	});
+	player.unref();
+	return waitForNewPlayerSource(previousSourceIds);
+}
+
+async function openUdemyPlayer(compatible) {
+	if (openingPlayer || ["starting", "recording", "paused", "finalizing"].includes(windowRecorder.state)) return;
+	const $button = $(compatible ? ".open-compatible-udemy-player" : ".open-udemy-player");
+	const $buttons = $(".open-udemy-player, .open-compatible-udemy-player");
+	openingPlayer = true;
+	$buttons.prop("disabled", true);
+	$button.addClass("loading");
 	try {
-		const executable = compatiblePlayerExecutable();
-		if (!executable) throw new Error(translate("Microsoft Edge or Google Chrome was not found."));
-		const previousSourceIds = new Set((await windowRecorder.listSources()).map((source) => source.id));
-		const subdomain = (Settings.subDomain || "www").trim() || "www";
-		const player = spawn(executable, [`--app=https://${subdomain}.udemy.com/`, "--start-maximized"], {
-			detached: true,
-			stdio: "ignore",
-		});
-		player.unref();
-		const source = await waitForNewPlayerSource(previousSourceIds);
+		const subdomain = (Settings.subDomain || "www").trim().toLowerCase() || "www";
+		if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(subdomain)) throw new Error("Invalid Udemy subdomain");
+		const source = compatible
+			? await openCompatibleUdemyPlayer(subdomain)
+			: await ipcRenderer.invoke("udemy-player:open", subdomain);
 		selectedRecordingSource = source;
+		$(".recording-source").removeClass("selected");
 		$(".embedded-player-status").show();
 		$(".recording-result").hide();
 		$(".start-recording").prop("disabled", false);
 	} catch (error) {
-		appendLog("openCompatibleUdemyPlayer_Error", error);
-		showAlert(error.message, translate("Unable to access the compatible Udemy Player"));
+		appendLog("openUdemyPlayer_Error", error);
+		showAlert(error.message, translate(compatible ? "Unable to access the compatible Udemy Player" : "Unable to open the Udemy Player"));
 	} finally {
-		$button.removeClass("loading disabled");
+		openingPlayer = false;
+		$buttons.prop("disabled", false);
+		$button.removeClass("loading");
 	}
 }
 
@@ -461,7 +487,8 @@ function renderRecorderState(snapshot) {
 	};
 
 	$(".recording-toolbar .checkbox, .refresh-recording-sources").toggleClass("disabled", active).find("input").prop("disabled", active);
-	$(".refresh-recording-sources, .open-udemy-player").prop("disabled", active);
+	$(".refresh-recording-sources").prop("disabled", active);
+	$(".open-udemy-player, .open-compatible-udemy-player").prop("disabled", active || openingPlayer);
 	$(".start-recording").prop("disabled", active || !selectedRecordingSource);
 	$(".recording-sources").toggle(!active);
 	$(".recording-workspace").toggle(active);
