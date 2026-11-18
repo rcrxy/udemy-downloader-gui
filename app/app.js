@@ -1,7 +1,7 @@
 "use strict";
 
-const { shell, remote, ipcRenderer } = require("electron");
-const { dialog, BrowserWindow, desktopCapturer } = remote;
+const { shell, ipcRenderer } = require("electron");
+const { dialog, desktopCapturer } = require("@electron/remote");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
@@ -15,7 +15,6 @@ const vtt2srt = require("node-vtt-to-srt");
 const FileDownload = require("./core/services/file-download.service");
 const WindowRecorder = require("./core/services/window-recorder.service");
 const https = require("https");
-const cookie = require("cookie");
 
 const { Settings, ui, utils } = require("./helpers");
 const { default: UdemyService, M3U8Service } = require("./core/services");
@@ -565,7 +564,7 @@ async function checkLogin(alertExpired = true) {
 
 			if (!userContext.header.isLoggedIn) {
 				if (alertExpired) {
-					showAlert(Settings.accessToken, translate("Token expired"));
+					showAlert(translate("Token expired"));
 				}
 				ui.resetToLogin();
 				return;
@@ -587,13 +586,11 @@ async function checkLogin(alertExpired = true) {
 
 			ui.resetToLogin();
 			showAlert(error.message, error.name || "Error");
-		} finally {
-			console.log("access-token", Settings.accessToken);
 		}
 	}
 }
 
-function loginWithUdemy() {
+async function loginWithUdemy() {
 	const $formLogin = $(".ui.login .form");
 
 	if ($formLogin.find('input[name="business"]').is(":checked")) {
@@ -605,41 +602,15 @@ function loginWithUdemy() {
 		ui.$subdomainField.val(null);
 	}
 
-	const parent = remote.getCurrentWindow();
-	const dimensions = parent.getSize();
-	const session = remote.session;
-	let udemyLoginWindow = new BrowserWindow({
-		width: dimensions[0] - 100,
-		height: dimensions[1] - 100,
-		parent,
-		modal: true,
-	});
-
-	session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["*://*.udemy.com/*"] }, function (request, callback) {
-		const token = request.requestHeaders.Authorization
-			? request.requestHeaders.Authorization.split(" ")[1]
-			: cookie.parse(request.requestHeaders.Cookie || "").access_token;
-
-		if (token) {
-			Settings.accessToken = token;
-			Settings.subDomain = new URL(request.url).hostname.split(".")[0];
-
-			udemyLoginWindow.destroy();
-			session.defaultSession.clearStorageData();
-			session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["*://*.udemy.com/*"] }, function (request, callback) {
-				callback({ requestHeaders: request.requestHeaders });
-			});
-			checkLogin();
+	try {
+		const result = await ipcRenderer.invoke("udemy:login", ui.$subdomainField.val() || "www");
+		if (result) {
+			Settings.accessToken = result.token;
+			Settings.subDomain = result.subdomain;
+			await checkLogin();
 		}
-		callback({ requestHeaders: request.requestHeaders });
-	});
-
-	Settings.subDomain = ui.$subdomainField.val() ?? "www";
-
-	if (ui.$subdomainField.val()) {
-		udemyLoginWindow.loadURL(`https://${Settings.subDomain}.udemy.com`);
-	} else {
-		udemyLoginWindow.loadURL("https://www.udemy.com/join/login-popup");
+	} catch (error) {
+		showAlert(error.message, translate("Login"));
 	}
 }
 

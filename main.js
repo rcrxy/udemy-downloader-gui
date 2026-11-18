@@ -1,5 +1,8 @@
 const { app, BrowserWindow, Menu, ipcMain, screen, shell } = require("electron");
 const { join } = require("path");
+const { pathToFileURL } = require("url");
+const remoteMain = require("@electron/remote/main");
+const { registerUdemyLogin } = require("./udemy-login");
 
 require("./environments.js");
 
@@ -21,16 +24,27 @@ if (isDebug) {
 if (app.isPackaged) {
     process.env.IS_PACKAGE = true;
 
-    const Sentry = require('@sentry/electron');
+    const Sentry = require('@sentry/electron/main');
     Sentry.init({ dsn: process.env.SENTRY_DSN });
 }
 else {
     process.env.SENTRY_DSN = "" //não logar em modo desenvolvedor
 }
 
-let downloadsSaved = false;
+const mainPage = join(__dirname, "app", "index.html");
+const mainPageURL = pathToFileURL(mainPage).href;
+let mainWindow;
+
+function isMainRenderer(event) {
+    return Boolean(mainWindow && event.sender === mainWindow.webContents &&
+        event.senderFrame === event.sender.mainFrame && event.senderFrame?.url === mainPageURL);
+}
+
+remoteMain.initialize();
+registerUdemyLogin(ipcMain, isMainRenderer);
 
 function createWindow() {
+    let downloadsSaved = false;
     const size = screen.getPrimaryDisplay().workAreaSize
     // Create the browser window.
     let win = new BrowserWindow({
@@ -44,13 +58,19 @@ function createWindow() {
         maximizable: true,
         webPreferences: {
             nodeIntegration: true,
-            enableRemoteModule: true,
             contextIsolation: false,
-            preload: "./preload.js"
+            preload: join(__dirname, "preload.js")
         }
     });
 
-    win.loadFile("app/index.html");
+    mainWindow = win;
+    remoteMain.enable(win.webContents);
+    win.webContents.on("will-navigate", (event) => event.preventDefault());
+    win.webContents.setWindowOpenHandler(({ url }) => {
+        if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(console.error);
+        return { action: "deny" };
+    });
+    win.loadFile(mainPage);
     // win.webContents.on("did-finish-load", () => {
     //   // console.log("did-finish-load");
     //   win.setTitle(`Udeler | Udemy Course Downloader - v${appVersion}`);
@@ -75,6 +95,7 @@ function createWindow() {
         // Dereference the window object, usually you would store windows
         // in an array if your app supports multi windows, this is the time
         // when you should delete the corresponding element.
+        if (mainWindow === win) mainWindow = null;
         win = null;
     });
 
@@ -199,8 +220,8 @@ app.on("window-all-closed", () => {
     if (process.platform !== 'darwin') app.quit();
 });
 
-ipcMain.on("quitApp", function () {
-    app.quit();
+ipcMain.on("quitApp", function (event) {
+    if (isMainRenderer(event)) app.quit();
 });
 
 

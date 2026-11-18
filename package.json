@@ -29,17 +29,18 @@
     "format": "prettier --write \"app/**/*.js\"",
     "postinstall": "electron-builder install-app-deps",
     "build": "electron-builder",
-    "build:w32": "electron-builder -w \"--ia32\"",
+    "build:dir": "electron-builder --win --x64 --dir --publish never",
     "deploy": "node ./node_modules/gh_deploy/index.js",
-    "build:local": "npm run build && npm run build:w32",
+    "build:local": "electron-builder --win --x64 --publish never",
     "sync:locales": "node ./sync-locales.js"
   },
   "dependencies": {
-    "@sentry/electron": "4.24.0",
+    "@electron/remote": "2.1.4",
+    "@sentry/electron": "8.4.0",
     "axios": "^1.7.9",
     "cookie": "^1.0.2",
     "dialogs": "^2.0.1",
-    "electron-settings": "3.2.0",
+    "electron-settings": "4.0.4",
     "jquery": "^3.7.1",
     "mt-files-downloader": "github:FaisalUmair/mt-files-downloader-wrapper",
     "node-cache": "^5.1.2",
@@ -47,8 +48,8 @@
     "sanitize-filename": "^1.6.3"
   },
   "devDependencies": {
-    "electron": "11.5.0",
-    "electron-builder": "^25.1.8",
+    "electron": "45.3.4",
+    "electron-builder": "26.18.0",
     "electron-reload": "^2.0.0-alpha.1",
     "gh_deploy": "github:heliomarpm/gh_deploy",
     "prettier": "^3.4.2"

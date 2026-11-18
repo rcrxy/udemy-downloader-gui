@@ -51,6 +51,7 @@ const Settings = (() => {
 	"use strict";
 
 	const settings = require("electron-settings");
+	const { app } = require("@electron/remote");
 	const path = require("path");
 	const { homedir } = require("os");
 
@@ -79,7 +80,17 @@ const Settings = (() => {
 	});
 
 	let _language = null;
-	let _prettify = false;
+	settings.configure({
+		dir: app.getPath("userData"),
+		// Keep the filename used by electron-settings 3.
+		fileName: "Settings",
+		prettify: /^(1|true)$/i.test(process.env.PRETTIFY_SETTINGS || ""),
+	});
+
+	function getSetting(keyPath, defaultValue) {
+		const value = settings.getSync(keyPath);
+		return value === undefined ? defaultValue : value;
+	}
 
 	/**
 	 * Ensures all default keys are set in the settings
@@ -87,18 +98,8 @@ const Settings = (() => {
 	 * @returns {void}
 	 */
 	function ensureDefaultKeys() {
-		if (!settings.get("language")) {
-			settings.set("language", getLanguage());
-		}
-
-		if (!settings.get("download")) {
-			settings.set("download", DownloadDefaultOptions);
-		} else {
-			// certifica que exista todas as propriedades
-			Object.keys(DownloadDefaultOptions).forEach((key) => {
-				settings.get(`download.${key}`, DownloadDefaultOptions[key]);
-			});
-		}
+		if (!getSetting("language")) settings.setSync("language", getLanguage());
+		if (!getSetting("download")) settings.setSync("download", DownloadDefaultOptions);
 	}
 
 	/**
@@ -108,17 +109,13 @@ const Settings = (() => {
 	 */
 	function getLanguage() {
 		try {
-			let language = settings.get("language");
+			let language = getSetting("language");
 
 			if (!language) {
 				const navigatorLang = navigator.language.substring(0, 2);
 				const meta = require("../locale/meta.json");
 
 				language = Object.keys(meta).find((key) => meta[key] === (navigatorLang === "pt" ? "pt_BR.json" : `${navigatorLang}.json`));
-
-				if (language) {
-					settings.set("language", language, { prettify: _prettify });
-				}
 			}
 
 			return language || "English";
@@ -134,14 +131,13 @@ const Settings = (() => {
 	 * @returns {string} - The download directory path
 	 */
 	function downloadDirectory(courseName = "") {
-		const download_dir = settings.get("download.path") || DownloadDefaultOptions.path;
+		const download_dir = getSetting("download.path") || DownloadDefaultOptions.path;
 		return path.join(download_dir, courseName);
 	}
 
 	// Initialize settings
 	(function init() {
 		console.log("Initialize settings");
-		_prettify = process.env.PRETTIFY_SETTINGS || false;
 		ensureDefaultKeys();
 	})();
 
@@ -149,9 +145,9 @@ const Settings = (() => {
 		DownloadType,
 		DownloadDefaultOptions,
 		/** @param {String, Object} */
-		get: (keyPath, defaultValue = undefined) => settings.get(keyPath, defaultValue),
+		get: getSetting,
 		/** @param {String, Object} */
-		set: (keyPath, value) => settings.set(keyPath, value, { prettify: _prettify }),
+		set: (keyPath, value) => settings.setSync(keyPath, value),
 		/** @type {string} */
 		get language() {
 			if (!_language) {
@@ -190,11 +186,11 @@ const Settings = (() => {
 		},
 		/** @type {DownloadSetting} */
 		get download() {
-			return this.get("download");
+			return { ...DownloadDefaultOptions, ...this.get("download") };
 		},
 		/** @type {DownloadSetting} */
 		set download(value) {
-			this.set("download", value);
+			this.set("download", { ...this.get("download"), ...value });
 		},
 		/** @type {Array<DownloadHistory>} */
 		get downloadHistory() {

@@ -1,13 +1,7 @@
-const fs = require('fs');
+const { join } = require("node:path");
 
-const envFile = fs.readFileSync(`${__dirname}/.env`, 'utf-8').toString();
-const envVars = envFile.split("\n")
-
-for (let index = 0; index < envVars.length; index++) {
-    const el = envVars[index].split("=");
-    if (el.length > 1) {
-        process.env[el[0]] = el[1];
-    }    
+try {
+    process.loadEnvFile(join(__dirname, ".env"));
+} catch (error) {
+    if (error.code !== "ENOENT") throw error;
 }
-
-// console.log(process.env)
