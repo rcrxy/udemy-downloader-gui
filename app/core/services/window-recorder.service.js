@@ -98,6 +98,11 @@ class WindowRecorder {
 		}));
 	}
 
+	async findSource(sourceId) {
+		const sources = await this.listSources();
+		return sources.find((source) => source.id === sourceId) || null;
+	}
+
 	videoConstraints(sourceId) {
 		return {
 			mandatory: {

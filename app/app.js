@@ -5,6 +5,7 @@ const { dialog, BrowserWindow, desktopCapturer } = remote;
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
+const { spawn } = require("child_process");
 const { pipeline } = require("stream");
 
 const dialogs = require("dialogs")({});
@@ -146,6 +147,8 @@ $(".ui.dashboard .content").on("click", "#clear_logger", clearLogArea);
 $(".ui.dashboard .content").on("click", "#save_logger", saveLogFile);
 
 $(".ui.dashboard .content").on("click", ".refresh-recording-sources", loadRecordingSources);
+
+$(".ui.dashboard .content").on("click", ".open-udemy-player", openCompatibleUdemyPlayer);
 
 $(".ui.dashboard .content").on("click", ".start-recording", async () => {
 	if (!selectedRecordingSource) {
@@ -352,6 +355,7 @@ function renderRecordingSources(sources) {
 			selectedRecordingSource = source;
 			$sources.find(".recording-source").removeClass("selected");
 			$card.addClass("selected");
+			$(".embedded-player-status").hide();
 			$(".start-recording").prop("disabled", false);
 			$(".recording-result").hide();
 		};
@@ -393,6 +397,58 @@ async function loadRecordingSources() {
 	}
 }
 
+function compatiblePlayerExecutable() {
+	const candidates = [
+		process.env.EDGE_PATH,
+		process.env.CHROME_PATH,
+		path.join(process.env.ProgramFiles || "", "Microsoft", "Edge", "Application", "msedge.exe"),
+		path.join(process.env["ProgramFiles(x86)"] || "", "Microsoft", "Edge", "Application", "msedge.exe"),
+		path.join(process.env.ProgramFiles || "", "Google", "Chrome", "Application", "chrome.exe"),
+		path.join(process.env["ProgramFiles(x86)"] || "", "Google", "Chrome", "Application", "chrome.exe"),
+		path.join(process.env.LOCALAPPDATA || "", "Google", "Chrome", "Application", "chrome.exe"),
+	].filter(Boolean);
+	return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
+async function waitForNewPlayerSource(previousSourceIds) {
+	for (let attempt = 0; attempt < 40; attempt++) {
+		const sources = await windowRecorder.listSources();
+		const added = sources.filter((source) => !previousSourceIds.has(source.id));
+		const source =
+			added.find((candidate) => /udemy|online courses|learning/i.test(candidate.name)) ||
+			(added.length === 1 ? added[0] : null);
+		if (source) return source;
+		await new Promise((resolve) => setTimeout(resolve, 250));
+	}
+	throw new Error(translate("Unable to access the compatible Udemy Player"));
+}
+
+async function openCompatibleUdemyPlayer() {
+	if (["starting", "recording", "paused", "finalizing"].includes(windowRecorder.state)) return;
+	const $button = $(".open-udemy-player").addClass("loading disabled");
+	try {
+		const executable = compatiblePlayerExecutable();
+		if (!executable) throw new Error(translate("Microsoft Edge or Google Chrome was not found."));
+		const previousSourceIds = new Set((await windowRecorder.listSources()).map((source) => source.id));
+		const subdomain = (Settings.subDomain || "www").trim() || "www";
+		const player = spawn(executable, [`--app=https://${subdomain}.udemy.com/`, "--start-maximized"], {
+			detached: true,
+			stdio: "ignore",
+		});
+		player.unref();
+		const source = await waitForNewPlayerSource(previousSourceIds);
+		selectedRecordingSource = source;
+		$(".embedded-player-status").show();
+		$(".recording-result").hide();
+		$(".start-recording").prop("disabled", false);
+	} catch (error) {
+		appendLog("openCompatibleUdemyPlayer_Error", error);
+		showAlert(error.message, translate("Unable to access the compatible Udemy Player"));
+	} finally {
+		$button.removeClass("loading disabled");
+	}
+}
+
 function renderRecorderState(snapshot) {
 	const active = ["starting", "recording", "paused", "finalizing"].includes(snapshot.state);
 	const labels = {
@@ -406,7 +462,7 @@ function renderRecorderState(snapshot) {
 	};
 
 	$(".recording-toolbar .checkbox, .refresh-recording-sources").toggleClass("disabled", active).find("input").prop("disabled", active);
-	$(".refresh-recording-sources").prop("disabled", active);
+	$(".refresh-recording-sources, .open-udemy-player").prop("disabled", active);
 	$(".start-recording").prop("disabled", active || !selectedRecordingSource);
 	$(".recording-sources").toggle(!active);
 	$(".recording-workspace").toggle(active);

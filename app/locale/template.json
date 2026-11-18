@@ -123,5 +123,10 @@
   "Paused": "",
   "Saving Recording": "",
   "Resume": "",
-  "Select a window to record": ""
+  "Select a window to record": "",
+  "Open Compatible Udemy Player": "",
+  "Udemy Player is ready to record": "",
+  "The compatible player opens an app window using the installed Microsoft Edge or Google Chrome profile.": "",
+  "Unable to access the compatible Udemy Player": "",
+  "Microsoft Edge or Google Chrome was not found.": ""
 }

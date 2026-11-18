@@ -217,6 +217,10 @@
                       <input type="checkbox" name="recording-system-audio" checked>
                       <label>${translate("Include system audio")}</label>
                     </div>
+                    <button class="ui violet open-udemy-player button" type="button" title="${translate("The compatible player opens an app window using the installed Microsoft Edge or Google Chrome profile.")}">
+                      <i class="globe icon"></i>
+                      ${translate("Open Compatible Udemy Player")}
+                    </button>
                     <button class="ui primary refresh-recording-sources button" type="button">
                       <i class="sync icon"></i>
                       ${translate("Refresh Sources")}
@@ -225,6 +229,11 @@
                       <i class="record icon"></i>
                       ${translate("Start Recording")}
                     </button>
+                  </div>
+
+                  <div class="ui positive message embedded-player-status" style="display: none">
+                    <i class="globe icon"></i>
+                    <span>${translate("Udemy Player is ready to record")}</span>
                   </div>
 
                   <div class="ui three stackable cards recording-sources">

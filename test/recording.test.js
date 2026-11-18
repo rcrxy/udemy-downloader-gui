@@ -99,6 +99,8 @@ test("window recorder lists capturable sources", async (t) => {
 			icon: "data:image/png;base64,icon",
 		},
 	]);
+	assert.equal((await recorder.findSource("window:1")).name, "Lesson Browser");
+	assert.equal(await recorder.findSource("window:missing"), null);
 });
 
 test("window recorder streams chunks to disk and completes", async (t) => {

@@ -123,5 +123,10 @@
   "Paused": "已暂停",
   "Saving Recording": "正在保存录制",
   "Resume": "继续",
-  "Select a window to record": "请选择要录制的窗口"
+  "Select a window to record": "请选择要录制的窗口",
+  "Open Compatible Udemy Player": "打开兼容 Udemy 播放器",
+  "Udemy Player is ready to record": "Udemy 播放器已准备好录制",
+  "The compatible player opens an app window using the installed Microsoft Edge or Google Chrome profile.": "兼容播放器会使用已安装的 Microsoft Edge 或 Google Chrome 配置打开应用窗口。",
+  "Unable to access the compatible Udemy Player": "无法访问兼容 Udemy 播放器",
+  "Microsoft Edge or Google Chrome was not found.": "未找到 Microsoft Edge 或 Google Chrome。"
 }
