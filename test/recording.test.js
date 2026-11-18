@@ -69,24 +69,19 @@ function fixture(t) {
 	return directory;
 }
 
-function fakeDesktopCapturer() {
-	const image = (value) => ({ isEmpty: () => false, toDataURL: () => value });
-	return {
-		getSources: async () => [
-			{
-				id: "window:1",
-				name: "Lesson Browser",
-				thumbnail: image("data:image/png;base64,thumb"),
-				appIcon: image("data:image/png;base64,icon"),
-			},
-		],
-	};
+async function listSources() {
+	return [{
+		id: "window:1",
+		name: "Lesson Browser",
+		thumbnail: "data:image/png;base64,thumb",
+		icon: "data:image/png;base64,icon",
+	}];
 }
 
 test("window recorder lists capturable sources", async (t) => {
 	fixture(t);
 	const recorder = new WindowRecorder({
-		desktopCapturer: fakeDesktopCapturer(),
+		listSources,
 		getOutputDirectory: () => os.tmpdir(),
 		mediaDevices: {},
 		MediaRecorderClass: FakeMediaRecorder,
@@ -108,7 +103,7 @@ test("window recorder streams chunks to disk and completes", async (t) => {
 	const stream = fakeStream(true);
 	const changes = [];
 	const recorder = new WindowRecorder({
-		desktopCapturer: fakeDesktopCapturer(),
+		listSources,
 		getOutputDirectory: () => directory,
 		mediaDevices: { getUserMedia: async () => stream },
 		MediaRecorderClass: FakeMediaRecorder,
@@ -134,7 +129,7 @@ test("window recorder falls back to video when system audio is unavailable", asy
 	const videoOnly = fakeStream(false);
 	let requests = 0;
 	const recorder = new WindowRecorder({
-		desktopCapturer: fakeDesktopCapturer(),
+		listSources,
 		getOutputDirectory: () => directory,
 		mediaDevices: {
 			getUserMedia: async () => {
@@ -150,4 +145,21 @@ test("window recorder falls back to video when system audio is unavailable", asy
 	assert.match(started.audioWarning, /video only/);
 	await recorder.stop();
 	assert.equal(requests, 2);
+});
+
+test("window recorder stops the first stream when audio was requested but missing", async () => {
+	const emptyAudio = fakeStream(false);
+	const videoOnly = fakeStream(false);
+	let requests = 0;
+	const recorder = new WindowRecorder({
+		listSources,
+		getOutputDirectory: () => os.tmpdir(),
+		mediaDevices: { getUserMedia: async () => ++requests === 1 ? emptyAudio : videoOnly },
+		MediaRecorderClass: FakeMediaRecorder,
+	});
+	const capture = await recorder.captureStream("window:1", true);
+	assert.equal(capture.stream, videoOnly);
+	assert.match(capture.audioWarning, /audio track was not created/);
+	assert.deepEqual(emptyAudio.stopped, ["video"]);
+	videoOnly.getTracks().forEach((track) => track.stop());
 });

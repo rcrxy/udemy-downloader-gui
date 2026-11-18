@@ -1,7 +1,7 @@
 "use strict";
 
 const { shell, ipcRenderer } = require("electron");
-const { dialog, desktopCapturer } = require("@electron/remote");
+const { dialog } = require("@electron/remote");
 const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
@@ -29,7 +29,7 @@ let udemyService;
 let selectedRecordingSource = null;
 let recordingClock = null;
 const windowRecorder = new WindowRecorder({
-	desktopCapturer,
+	listSources: () => ipcRenderer.invoke("recording:list-sources"),
 	getOutputDirectory: () => Settings.downloadDirectory("Recordings"),
 	onChange: renderRecorderState,
 });
@@ -166,7 +166,7 @@ $(".ui.dashboard .content").on("click", ".start-recording", async () => {
 		showAlert(error.message, translate("Unable to start recording"));
 		renderRecorderState(windowRecorder.snapshot());
 	} finally {
-		$(".start-recording").removeClass("loading");
+		$(".start-recording").removeClass("loading disabled");
 	}
 });
 

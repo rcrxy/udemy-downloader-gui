@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, ipcMain, screen, shell } = require("electron");
+const { app, BrowserWindow, Menu, desktopCapturer, ipcMain, screen, shell } = require("electron");
 const { join } = require("path");
 const { pathToFileURL } = require("url");
 const remoteMain = require("@electron/remote/main");
@@ -42,6 +42,19 @@ function isMainRenderer(event) {
 
 remoteMain.initialize();
 registerUdemyLogin(ipcMain, isMainRenderer);
+
+ipcMain.handle("recording:list-sources", async (event) => {
+    if (!isMainRenderer(event)) throw new Error("Recording sources are only available from the main window");
+    const sources = await desktopCapturer.getSources({
+        types: ["window", "screen"],
+        thumbnailSize: { width: 320, height: 180 },
+        fetchWindowIcons: true,
+    });
+    const imageUrl = (image) => image && !image.isEmpty() ? image.toDataURL() : null;
+    return sources.map(({ id, name, thumbnail, appIcon }) => ({
+        id, name, thumbnail: imageUrl(thumbnail), icon: imageUrl(appIcon),
+    }));
+});
 
 function createWindow() {
     let downloadsSaved = false;

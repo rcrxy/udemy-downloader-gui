@@ -20,7 +20,7 @@ function timestamp(date) {
 
 class WindowRecorder {
 	constructor({
-		desktopCapturer,
+		listSources,
 		getOutputDirectory,
 		mediaDevices = navigator.mediaDevices,
 		MediaRecorderClass = MediaRecorder,
@@ -30,7 +30,7 @@ class WindowRecorder {
 		now = Date.now,
 		onChange = () => {},
 	}) {
-		this.desktopCapturer = desktopCapturer;
+		this.listSources = listSources;
 		this.getOutputDirectory = getOutputDirectory;
 		this.mediaDevices = mediaDevices;
 		this.MediaRecorderClass = MediaRecorderClass;
@@ -84,20 +84,6 @@ class WindowRecorder {
 		return Math.max(0, end - this.startedAt - this.pausedDuration);
 	}
 
-	async listSources() {
-		const sources = await this.desktopCapturer.getSources({
-			types: ["window", "screen"],
-			thumbnailSize: { width: 320, height: 180 },
-			fetchWindowIcons: true,
-		});
-		return sources.map((source) => ({
-			id: source.id,
-			name: source.name,
-			thumbnail: source.thumbnail && !source.thumbnail.isEmpty() ? source.thumbnail.toDataURL() : null,
-			icon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null,
-		}));
-	}
-
 	async findSource(sourceId) {
 		const sources = await this.listSources();
 		return sources.find((source) => source.id === sourceId) || null;
@@ -131,6 +117,7 @@ class WindowRecorder {
 		try {
 			const stream = await this.mediaDevices.getUserMedia({ audio, video });
 			if (!stream.getAudioTracks().length) {
+				stream.getTracks().forEach((track) => track.stop());
 				throw new Error("System audio track was not created");
 			}
 			return { stream, audioWarning: null };
@@ -182,6 +169,7 @@ class WindowRecorder {
 				this.resolveCompletion = resolve;
 				this.rejectCompletion = reject;
 			});
+			this.completion.catch(() => {});
 			this.recorder = new this.MediaRecorderClass(this.stream, {
 				mimeType,
 				videoBitsPerSecond: 8_000_000,
