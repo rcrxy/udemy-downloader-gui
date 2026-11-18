@@ -51,7 +51,7 @@ const Settings = (() => {
 	"use strict";
 
 	const settings = require("electron-settings");
-	const { app } = require("@electron/remote");
+	const { app = require("@electron/remote").app } = require("electron");
 	const path = require("path");
 	const { homedir } = require("os");
 

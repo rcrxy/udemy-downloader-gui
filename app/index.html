@@ -215,7 +215,7 @@
                   <div class="recording-toolbar">
                     <div class="ui toggle checkbox">
                       <input type="checkbox" name="recording-system-audio" checked>
-                      <label>${translate("Include system audio")}</label>
+                      <label>${translate("Include audio")}</label>
                     </div>
                     <button class="ui violet open-udemy-player button" type="button">
                       <i class="globe icon"></i>
@@ -247,6 +247,7 @@
                     <div class="recording-preview-wrapper">
                       <video class="recording-preview" autoplay muted playsinline></video>
                     </div>
+                    <div class="ui info message recording-element-status" style="display: none">${translate("Recording video from the Udemy Player")}</div>
                     <div class="ui warning message recording-audio-warning" style="display: none"></div>
                     <div class="recording-status-bar">
                       <div>

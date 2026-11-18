@@ -60,6 +60,7 @@ class WindowRecorder {
 		this.state = "idle";
 		this.includesAudio = false;
 		this.audioWarning = null;
+		this.fallbackNotice = null;
 	}
 
 	snapshot() {
@@ -70,6 +71,7 @@ class WindowRecorder {
 			elapsedMs: this.elapsedMs(),
 			includesAudio: this.includesAudio,
 			audioWarning: this.audioWarning,
+			fallbackNotice: this.fallbackNotice,
 			error: this.failure?.message || null,
 		};
 	}
@@ -143,11 +145,12 @@ class WindowRecorder {
 		throw new Error("Unable to create a unique recording file path");
 	}
 
-	async start(source, { includeAudio = true } = {}) {
+	async start(source, { includeAudio = true, fallbackReason } = {}) {
 		if (this.state !== "idle" && this.state !== "completed" && this.state !== "error") {
 			throw new Error("A recording is already active");
 		}
 		this.reset();
+		this.fallbackNotice = fallbackReason ? "Switched to window recording. " + fallbackReason : null;
 		this.state = "starting";
 		this.emit();
 

@@ -27,7 +27,12 @@ const loggers = [];
 let repoAccount = "heliomarpm";
 let udemyService;
 let selectedRecordingSource = null;
+let recordingSnapshot = { state: "idle", elapsedMs: 0 };
+let recordingSnapshotTime = 0;
 let recordingClock = null;
+let recordingCommandPending = false;
+let recordingStartTask;
+let recordingControlTask;
 let openingPlayer = false;
 const windowRecorder = new WindowRecorder({
 	listSources: () => ipcRenderer.invoke("recording:list-sources"),
@@ -35,7 +40,17 @@ const windowRecorder = new WindowRecorder({
 	onChange: renderRecorderState,
 });
 
-ipcRenderer.on("saveDownloads", () => saveDownloads(true));
+ipcRenderer.on("saveDownloads", async () => {
+	try {
+		await recordingStartTask;
+		await recordingControlTask;
+		if (["recording", "paused"].includes(recordingSnapshot.state)) await controlRecording("stop");
+	} catch (error) {
+		appendLog("closeRecording_Error", error);
+	} finally {
+		saveDownloads(true);
+	}
+});
 
 // external browser
 // $(document).on('click', 'a[href^="http"]', (event) => {
@@ -157,43 +172,83 @@ ipcRenderer.on("udemy-player:closed", (_event, id) => {
 	$(".start-recording").prop("disabled", true);
 });
 
-$(".ui.dashboard .content").on("click", ".start-recording", async () => {
-	if (!selectedRecordingSource) {
-		showAlert(translate("Select a window to record"));
+async function startWindowRecording(source, includeAudio, fallbackReason) {
+	await windowRecorder.start(source, { includeAudio, fallbackReason });
+	$(".recording-preview")[0].srcObject = windowRecorder.stream;
+}
+
+function controlRecording(action) {
+	if (recordingSnapshot.mode === "element") return ipcRenderer.invoke("element-recording:control", action);
+	return windowRecorder[action]();
+}
+
+ipcRenderer.on("element-recording:state", async (_event, snapshot) => {
+	renderRecorderState(snapshot);
+	if (!snapshot.fallback) return;
+	const source = selectedRecordingSource;
+	if (source?.id !== snapshot.sourceId) {
+		renderRecorderState({ state: "error", error: snapshot.fallback, elapsedMs: 0 });
 		return;
 	}
-	const $video = $(".recording-preview");
+	if (snapshot.path) appendLog("Element recording saved before switching to window capture", snapshot.path);
 	try {
-		$(".start-recording").addClass("loading disabled");
-		await windowRecorder.start(selectedRecordingSource, {
-			includeAudio: $('input[name="recording-system-audio"]').is(":checked"),
-		});
-		$video[0].srcObject = windowRecorder.stream;
+		await startWindowRecording(source, recordingIncludesAudio(), snapshot.fallback);
+	} catch (error) {
+		appendLog("recordingFallback_Error", error);
+	}
+});
+
+function recordingIncludesAudio() {
+	return $('input[name="recording-system-audio"]').is(":checked");
+}
+
+async function startRecording() {
+	const source = selectedRecordingSource;
+	if (!source || openingPlayer || isRecordingActive()) return;
+	const includeAudio = recordingIncludesAudio();
+	const $button = $(".start-recording").addClass("loading");
+	try {
+		if (source.embedded) {
+			renderRecorderState({ state: "starting", mode: "element", elapsedMs: 0 });
+			const result = await ipcRenderer.invoke("element-recording:start", source.id, includeAudio);
+			if (result?.fallback) await startWindowRecording(source, includeAudio, result.fallback);
+		} else {
+			await startWindowRecording(source, includeAudio);
+		}
 	} catch (error) {
 		appendLog("startRecording_Error", error);
+		renderRecorderState({ state: "error", error: error.message, elapsedMs: 0 });
 		showAlert(error.message, translate("Unable to start recording"));
-		renderRecorderState(windowRecorder.snapshot());
 	} finally {
-		$(".start-recording").removeClass("loading disabled");
+		$button.removeClass("loading");
 	}
+}
+
+$(".ui.dashboard .content").on("click", ".start-recording", () => {
+	if (recordingStartTask) return;
+	recordingStartTask = startRecording().finally(() => { recordingStartTask = null; });
 });
 
-$(".ui.dashboard .content").on("click", ".pause-recording", () => {
-	if (windowRecorder.state === "paused") windowRecorder.resume();
-	else windowRecorder.pause();
-});
-
-$(".ui.dashboard .content").on("click", ".stop-recording", async () => {
-	$(".pause-recording, .stop-recording").addClass("loading disabled");
+async function runRecordingCommand(action) {
+	if (recordingCommandPending) return;
+	recordingCommandPending = true;
+	$(".pause-recording, .stop-recording").prop("disabled", true);
 	try {
-		await windowRecorder.stop();
+		recordingControlTask = Promise.resolve(controlRecording(action));
+		await recordingControlTask;
 	} catch (error) {
-		appendLog("stopRecording_Error", error);
+		appendLog("recordingControl_Error", error);
 		showAlert(error.message, translate("Recording failed"));
 	} finally {
-		$(".pause-recording, .stop-recording").removeClass("loading disabled");
+		recordingCommandPending = false;
+		recordingControlTask = null;
+		renderRecorderState(recordingSnapshot);
 	}
-});
+}
+
+$(".ui.dashboard .content").on("click", ".pause-recording", () =>
+	runRecordingCommand(recordingSnapshot.state === "paused" ? "resume" : "pause"));
+$(".ui.dashboard .content").on("click", ".stop-recording", () => runRecordingCommand("stop"));
 
 $(".ui.dashboard .content").on("click", ".open-recordings", async () => {
 	const directory = Settings.downloadDirectory("Recordings");
@@ -358,7 +413,7 @@ function renderRecordingSources(sources) {
 		);
 		$card.append($image, $content);
 		const selectSource = () => {
-			if (!["idle", "completed", "error"].includes(windowRecorder.state)) return;
+			if (openingPlayer || isRecordingActive()) return;
 			selectedRecordingSource = source;
 			$sources.find(".recording-source").removeClass("selected");
 			$card.addClass("selected");
@@ -387,7 +442,7 @@ function renderRecordingSources(sources) {
 
 async function loadRecordingSources() {
 	const $button = $(".refresh-recording-sources");
-	if (["starting", "recording", "paused", "finalizing"].includes(windowRecorder.state)) return;
+	if (openingPlayer || isRecordingActive()) return;
 	$button.addClass("loading disabled");
 	try {
 		const sources = await windowRecorder.listSources();
@@ -447,10 +502,11 @@ async function openCompatibleUdemyPlayer(subdomain) {
 }
 
 async function openUdemyPlayer(compatible) {
-	if (openingPlayer || ["starting", "recording", "paused", "finalizing"].includes(windowRecorder.state)) return;
+	if (openingPlayer || isRecordingActive()) return;
 	const $button = $(compatible ? ".open-compatible-udemy-player" : ".open-udemy-player");
 	const $buttons = $(".open-udemy-player, .open-compatible-udemy-player");
 	openingPlayer = true;
+	$(".start-recording").prop("disabled", true);
 	$buttons.prop("disabled", true);
 	$button.addClass("loading");
 	try {
@@ -469,13 +525,31 @@ async function openUdemyPlayer(compatible) {
 		showAlert(error.message, translate(compatible ? "Unable to access the compatible Udemy Player" : "Unable to open the Udemy Player"));
 	} finally {
 		openingPlayer = false;
-		$buttons.prop("disabled", false);
+		$(".start-recording").prop("disabled", isRecordingActive() || !selectedRecordingSource);
+		$buttons.prop("disabled", isRecordingActive());
 		$button.removeClass("loading");
 	}
 }
 
+function isRecordingActive() {
+	return ["starting", "recording", "paused", "finalizing"].includes(recordingSnapshot.state);
+}
+
+function recordingElapsed() {
+	const { state, elapsedMs } = recordingSnapshot;
+	return state === "recording" ? elapsedMs + Date.now() - recordingSnapshotTime : elapsedMs;
+}
+
 function renderRecorderState(snapshot) {
-	const active = ["starting", "recording", "paused", "finalizing"].includes(snapshot.state);
+	if (snapshot !== recordingSnapshot) {
+		recordingSnapshot = snapshot;
+		recordingSnapshotTime = Date.now();
+	}
+	const active = isRecordingActive();
+	const canControl = !recordingCommandPending && ["recording", "paused"].includes(snapshot.state);
+	const warning = [snapshot.fallbackNotice, snapshot.audioWarning].filter(Boolean).join(" ");
+	$(".recording-preview-wrapper").toggle(snapshot.mode !== "element");
+	$(".recording-element-status").toggle(snapshot.mode === "element" && active);
 	const labels = {
 		idle: translate("Ready"),
 		starting: translate("Starting Recording"),
@@ -489,21 +563,21 @@ function renderRecorderState(snapshot) {
 	$(".recording-toolbar .checkbox, .refresh-recording-sources").toggleClass("disabled", active).find("input").prop("disabled", active);
 	$(".refresh-recording-sources").prop("disabled", active);
 	$(".open-udemy-player, .open-compatible-udemy-player").prop("disabled", active || openingPlayer);
-	$(".start-recording").prop("disabled", active || !selectedRecordingSource);
+	$(".start-recording").prop("disabled", active || openingPlayer || !selectedRecordingSource);
 	$(".recording-sources").toggle(!active);
 	$(".recording-workspace").toggle(active);
 	$(".recording-state-label").text(labels[snapshot.state] || snapshot.state);
-	$(".recording-timer").text(formatRecordingTime(snapshot.elapsedMs));
-	$(".pause-recording").prop("disabled", !["recording", "paused"].includes(snapshot.state));
-	$(".stop-recording").prop("disabled", !["recording", "paused"].includes(snapshot.state));
+	$(".recording-timer").text(formatRecordingTime(recordingElapsed()));
+	$(".pause-recording").prop("disabled", !canControl);
+	$(".stop-recording").prop("disabled", !canControl);
 	$(".pause-recording").html(
 		snapshot.state === "paused"
 			? '<i class="play icon"></i> ' + translate("Resume")
 			: '<i class="pause icon"></i> ' + translate("Pause")
 	);
 	$(".recording-audio-warning")
-		.text(snapshot.audioWarning || "")
-		.toggle(Boolean(snapshot.audioWarning));
+		.text(warning)
+		.toggle(Boolean(warning));
 
 	if (snapshot.state === "completed") {
 		$(".recording-preview")[0].srcObject = null;
@@ -524,14 +598,14 @@ function renderRecorderState(snapshot) {
 			.show()
 			.find(".header")
 			.text(translate("Recording failed"));
-		$(".recording-result-path").text(snapshot.error || "");
+		$(".recording-result-path").text([snapshot.fallbackNotice, snapshot.error].filter(Boolean).join(" "));
 		$(".recording-sources").show();
 	}
 
 	if (!recordingClock) {
 		recordingClock = setInterval(() => {
-			if (["starting", "recording", "paused", "finalizing"].includes(windowRecorder.state)) {
-				$(".recording-timer").text(formatRecordingTime(windowRecorder.elapsedMs()));
+			if (isRecordingActive()) {
+				$(".recording-timer").text(formatRecordingTime(recordingElapsed()));
 			}
 		}, 250);
 	}
@@ -543,7 +617,7 @@ function selectDownloadPath() {
 	});
 
 	if (path && path[0]) {
-		fs.access(path[0], fs.constants.R_OK && fs.constants.W_OK, function (err) {
+		fs.access(path[0], fs.constants.R_OK | fs.constants.W_OK, function (err) {
 			if (err) {
 				showAlert(translate("Cannot select this folder"));
 			} else {
@@ -1261,7 +1335,7 @@ async function saveM3u($course) {
 		.showSaveDialog({
 			title: "Save M3U",
 			defaultPath: `${courseName}.m3u`,
-			filters: [{ name: "M3U File (*.m3u)", fileExtension: ["m3u"] }],
+			filters: [{ name: "M3U File (*.m3u)", extensions: ["m3u"] }],
 		})
 		.then((result) => {
 			if (!result.canceled) {
@@ -1854,7 +1928,7 @@ function saveLogFile() {
 		.showSaveDialog({
 			title: "Udeler Log",
 			defaultPath: "udeler_logger.txt",
-			filters: [{ name: "Text File (*.txt)", fileExtension: ["txt"] }],
+			filters: [{ name: "Text File (*.txt)", extensions: ["txt"] }],
 		})
 		.then((result) => {
 			if (!result.canceled) {

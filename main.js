@@ -4,6 +4,7 @@ const { pathToFileURL } = require("url");
 const remoteMain = require("@electron/remote/main");
 const { registerUdemyLogin } = require("./udemy-login");
 const { registerUdemyPlayer } = require("./udemy-player");
+const { registerElementRecorder } = require("./element-recorder");
 
 require("./environments.js");
 
@@ -43,7 +44,8 @@ function isMainRenderer(event) {
 
 remoteMain.initialize();
 registerUdemyLogin(ipcMain, isMainRenderer);
-registerUdemyPlayer(ipcMain, isMainRenderer);
+const getPlayer = registerUdemyPlayer(ipcMain, isMainRenderer);
+registerElementRecorder(ipcMain, isMainRenderer, getPlayer);
 
 ipcMain.handle("recording:list-sources", async (event) => {
     if (!isMainRenderer(event)) throw new Error("Recording sources are only available from the main window");

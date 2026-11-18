@@ -1,4 +1,5 @@
 const { BrowserWindow, session } = require("electron");
+const { join } = require("node:path");
 const { udemyHost } = require("./udemy-login");
 
 const PLAYER_PARTITION = "persist:udemy-player";
@@ -50,6 +51,7 @@ function registerUdemyPlayer(ipcMain, isMainRenderer) {
                     contextIsolation: true,
                     nodeIntegration: false,
                     backgroundThrottling: false,
+                    preload: join(__dirname, "player-recording-preload.js"),
                 },
             });
             const id = window.getMediaSourceId();
@@ -83,6 +85,7 @@ function registerUdemyPlayer(ipcMain, isMainRenderer) {
             throw error;
         }
     });
+    return () => player;
 }
 
 module.exports = { registerUdemyPlayer };
