@@ -156,6 +156,10 @@
                 <i class="download icon"></i>
                 ${translate("Downloads")}
               </a>
+              <a class="recorder-sidebar item">
+                <i class="record circle icon"></i>
+                ${translate("Recorder")}
+              </a>
               <a class="settings-sidebar item">
                 <i class="wrench icon"></i>
                 ${translate("Settings")}
@@ -196,6 +200,73 @@
                   <i class="ui download icon"></i> ${translate("Downloads")}
                 </h5>
                 <div class="ui divided unstackable courses items attached segment" style="margin-top: 0px !important;"></div>
+              </div>
+
+              <div class="ui recorder section">
+                <h5 class="ui top attached header">
+                  <i class="record circle icon"></i> ${translate("Window Recorder")}
+                </h5>
+                <div class="ui attached segment">
+                  <div class="ui info message">
+                    <div class="header">${translate("Record an open window")}</div>
+                    <p>${translate("Select the browser window that is playing the lecture. The window may stay behind Udeler, but keeping it minimized may stop Windows from providing video frames. System audio is captured with Windows loopback.")}</p>
+                  </div>
+
+                  <div class="recording-toolbar">
+                    <div class="ui toggle checkbox">
+                      <input type="checkbox" name="recording-system-audio" checked>
+                      <label>${translate("Include system audio")}</label>
+                    </div>
+                    <button class="ui primary refresh-recording-sources button" type="button">
+                      <i class="sync icon"></i>
+                      ${translate("Refresh Sources")}
+                    </button>
+                    <button class="ui red start-recording button" type="button" disabled>
+                      <i class="record icon"></i>
+                      ${translate("Start Recording")}
+                    </button>
+                  </div>
+
+                  <div class="ui three stackable cards recording-sources">
+                    <div class="ui segment">${translate("Click Refresh Sources to load open windows.")}</div>
+                  </div>
+
+                  <div class="recording-workspace" style="display: none">
+                    <div class="recording-preview-wrapper">
+                      <video class="recording-preview" autoplay muted playsinline></video>
+                    </div>
+                    <div class="ui warning message recording-audio-warning" style="display: none"></div>
+                    <div class="recording-status-bar">
+                      <div>
+                        <i class="red record circle icon recording-state-icon"></i>
+                        <strong class="recording-state-label">${translate("Recording")}</strong>
+                      </div>
+                      <strong class="recording-timer">00:00:00</strong>
+                    </div>
+                    <div class="ui buttons recording-actions">
+                      <button class="ui orange pause-recording button" type="button">
+                        <i class="pause icon"></i>
+                        ${translate("Pause")}
+                      </button>
+                      <button class="ui red stop-recording button" type="button">
+                        <i class="stop icon"></i>
+                        ${translate("Stop")}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="ui positive message recording-result" style="display: none">
+                    <div class="header">${translate("Recording saved")}</div>
+                    <p class="recording-result-path"></p>
+                    <button class="ui green open-recordings button" type="button">
+                      <i class="folder open icon"></i>
+                      ${translate("Open Recordings Folder")}
+                    </button>
+                    <button class="ui basic new-recording button" type="button">
+                      ${translate("Record Another Window")}
+                    </button>
+                  </div>
+                </div>
               </div>
 
               <div class="ui settings section">

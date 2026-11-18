@@ -23,7 +23,9 @@
   "scripts": {
     "dev": "electron . --developer",
     "start": "electron .",
+    "test": "npm run test:downloads && npm run test:recording",
     "test:downloads": "node test/downloads.test.js",
+    "test:recording": "node test/recording.test.js",
     "format": "prettier --write \"app/**/*.js\"",
     "postinstall": "electron-builder install-app-deps",
     "build": "electron-builder",

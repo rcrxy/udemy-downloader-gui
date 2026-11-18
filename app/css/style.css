@@ -250,3 +250,102 @@ body .dialog-widget.background {
   right: 10px;
   float: right;
 }
+
+.recording-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin: 16px 0;
+}
+
+.recording-sources {
+  margin-bottom: 16px !important;
+  max-height: 430px;
+  overflow-y: auto;
+}
+
+.recording-source {
+  cursor: pointer;
+  position: relative;
+}
+
+.recording-source .image {
+  background: #101418;
+}
+
+.recording-source .image img {
+  height: 150px;
+  object-fit: contain;
+  width: 100%;
+}
+
+.recording-source.selected {
+  box-shadow: 0 0 0 3px #6b21c8 inset, 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+
+.recording-source.selected:after {
+  background: #6b21c8;
+  border-radius: 50%;
+  color: #fff;
+  content: "\2713";
+  font-size: 14px;
+  line-height: 26px;
+  position: absolute;
+  right: 9px;
+  text-align: center;
+  top: 9px;
+  width: 26px;
+}
+
+.recording-preview-wrapper {
+  background: #080a0d;
+  border-radius: 6px 6px 0 0;
+  overflow: hidden;
+}
+
+.recording-preview {
+  display: block;
+  max-height: 420px;
+  min-height: 180px;
+  object-fit: contain;
+  width: 100%;
+}
+
+.recording-status-bar {
+  align-items: center;
+  background: #20242b;
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 14px;
+}
+
+.recording-status-bar .recording-state-icon {
+  animation: recording-pulse 1.2s infinite;
+}
+
+.recording-actions {
+  margin-top: 12px;
+}
+
+.recording-result .button {
+  margin-right: 8px;
+  margin-top: 8px;
+}
+
+@keyframes recording-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (max-width: 700px) {
+  .recording-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
